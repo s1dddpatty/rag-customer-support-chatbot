@@ -1,0 +1,14 @@
+# Python
+.env
+
+# Virtual Environments
+venv/
+
+# pycache
+__pycache__/
+
+# uploaded files
+uploads/*
+
+.chainlit/
+chainlit.md
