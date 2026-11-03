@@ -1,6 +1,5 @@
 from fastapi import Depends, HTTPException
 from jose import JWTError, jwt
-from fastapi import HTTPException, Depends
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -40,7 +39,8 @@ def get_current_user(
 
 def require_role(required_role: str):
     def role_checker(user=Depends(get_current_user)):
-        if user["role"] != required_role:
+        user_role = getattr(user, "user_role", None) if not isinstance(user, dict) else user.get("role", user.get("user_role"))
+        if user_role != required_role:
             raise HTTPException(
                 status_code=403,
                 detail=f"Access denied. {required_role} role required"

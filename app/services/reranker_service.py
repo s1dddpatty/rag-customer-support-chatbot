@@ -1,4 +1,7 @@
-from sentence_transformers import CrossEncoder
+try:
+    from sentence_transformers import CrossEncoder
+except ImportError:
+    CrossEncoder = None
 
 
 class RerankerService:

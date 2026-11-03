@@ -10,7 +10,7 @@ from app.api.document import router as document_router
 from app.core.dependencies import get_current_user
 from app.core.dependencies import require_role
 from contextlib import asynccontextmanager
-from app.services.scheduler import start_scheduler
+from app.services.scheduler import start_scheduler, scheduler
 
 # SQLAlchemy models
 from app.models.user import User
@@ -21,7 +21,9 @@ async def lifespan(app: FastAPI):
     # startup
     start_scheduler()
     yield
-    # shutdown to be added later if needed
+    # shutdown
+    if scheduler.running:
+        scheduler.shutdown(wait=False)
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
@@ -39,17 +41,16 @@ def read_root():
     }
 
 @app.get("/protected")
-def protected_route(user: dict = Depends(get_current_user)):
-    print("USER INSIDE ROUTE:", user) 
+def protected_route(user=Depends(get_current_user)):
     return {
         "message": "You are authenticated",
-        "user": user
+        "user": {"user_id": user.user_id, "username": user.username, "user_role": user.user_role}
     }
 
 @app.get("/admin-only")
 def admin_route(user=Depends(require_role("admin"))):
     return {
         "message": "Welcome Admin",
-        "user": user
+        "user": {"user_id": user.user_id, "username": user.username, "user_role": user.user_role}
     }
 

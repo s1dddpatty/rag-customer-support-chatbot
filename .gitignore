@@ -1,5 +1,7 @@
 # Python
 .env
+*.db
+chroma_data/
 
 # Virtual Environments
 venv/
@@ -9,6 +11,7 @@ __pycache__/
 
 # uploaded files
 uploads/*
+!uploads/.gitkeep
 
 .chainlit/
 chainlit.md

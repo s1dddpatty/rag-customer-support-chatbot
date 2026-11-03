@@ -26,8 +26,8 @@ def process_document_by_id(document_id: int, db: Session):
         # Extract markdown using Docling
         file_ext = os.path.splitext(doc.file_path)[1].lower()
 
-        # --- handle txt separately ---
-        if file_ext == ".txt":
+        # --- handle txt and md separately ---
+        if file_ext in [".txt", ".md"]:
             with open(doc.file_path, "r", encoding="utf-8") as f:
                 markdown_text = f.read()
 

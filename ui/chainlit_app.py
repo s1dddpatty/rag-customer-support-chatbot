@@ -8,37 +8,39 @@ UPLOAD_URL = "http://localhost:8000/api/documents/upload"
 DOCUMENTS_URL = "http://localhost:8000/api/documents/list"
 
 
-
 @cl.on_message
 async def main(message: cl.Message):
     role = cl.user_session.get("role")
 
     if role == "admin":
-        await cl.Message(content="Admin cannot use chat. Use upload instead.").send()
+        await cl.Message(content="Admin cannot use chat. You can upload documents.").send()
         return
-    
+
+    token = cl.user_session.get("token")
+    if not token:
+        await cl.Message(content="Please log in first.").send()
+        return
+
+    username = cl.user_session.get("username", "customer")
+
     async with httpx.AsyncClient(timeout=120.0) as client:
-        token = cl.user_session.get("token")
-
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-
+        headers = {"Authorization": f"Bearer {token}"}
         response = await client.post(
             API_URL,
-            json={"question": message.content},
-            headers=headers
+            json={"question": message.content, "session_id": username},
+            headers=headers,
         )
 
-    data = response.json()
+    if response.status_code != 200:
+        await cl.Message(content=f"Error ({response.status_code}): {response.text}").send()
+        return
 
+    data = response.json()
     answer = data.get("answer")
     if not answer or answer.strip() == "":
         answer = "I don't have that information in the documentation."
-    
-    sources = data.get("sources", [])
 
-    # combine into one response
+    sources = data.get("sources", [])
     source_text = ""
     if sources:
         source_text = "\n\n---\n**Sources:**\n\n" + "\n\n".join(
@@ -46,133 +48,97 @@ async def main(message: cl.Message):
         )
 
     final_response = answer + source_text
-
     await cl.Message(content=final_response).send()
 
-@cl.on_chat_start
-async def load_history():
-    async with httpx.AsyncClient() as client:
-        response = await client.get(HISTORY_URL)
-
-    history = response.json()
-
-    for msg in history:
-        await cl.Message(
-            content=msg["content"],
-            author=msg["role"]
-        ).send()
 
 @cl.on_chat_start
-async def upload_prompt():
-    files = await cl.AskFileMessage(
-        content="Upload a document (PDF)",
-        accept=["application/pdf"],
-        max_size_mb=10,
-        timeout=180
-    ).send()
-
-    if not files:
-        return
-
-    file = files[0]
-
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        token = cl.user_session.get("token")
-
-        headers = {
-            "Authorization": f"Bearer {token}"
-        }
-
-        with open(file.path, "rb") as f:
-            response = await client.post(
-                UPLOAD_URL,
-                files={"file": (file.name, f, "application/pdf")},
-                headers=headers
-            )
-
-
-    if response.status_code == 200:
-
-        await cl.Message(
-            content="Document uploaded. Processing may take ~30 seconds before it is available for queries."
-        ).send()
-
-        # fetch and show status
-        async with httpx.AsyncClient() as client:
-            docs_response = await client.get(
-                DOCUMENTS_URL,
-                headers=headers
-            )
-
-            if docs_response.status_code == 200:
-                docs = docs_response.json()
-
-                docs = docs[-5:]  # last 5 documents only
-
-                status_text = "\n".join(
-                    [f"{d['filename']} → {d['status']}" for d in docs]
-                )
-
-                await cl.Message(
-                    content=f"**Document Status:**\n\n{status_text}"
-                ).send()
-            else:
-                await cl.Message(
-                    content="Could not fetch document status."
-                ).send()
-
-    else:
-        await cl.Message(content=f"Upload failed: {response.text}").send()
-
-
-@cl.on_chat_start
-async def start():
-    # ask username
-    username_msg = await cl.AskUserMessage(
-        content="Enter username:"
-    ).send()
-    
-    username = username_msg['output']
+async def on_start():
+    # 1. Ask username
+    username_msg = await cl.AskUserMessage(content="Enter username:").send()
+    username = username_msg["output"] if username_msg else None
 
     if not username:
-        await cl.Message(content="Login cancelled").send()
+        await cl.Message(content="Login cancelled.").send()
         return
 
-    # ask password
-    password_msg = await cl.AskUserMessage(
-        content="Enter password:"
-    ).send()
+    # 2. Ask password
+    password_msg = await cl.AskUserMessage(content="Enter password:").send()
+    password = password_msg["output"] if password_msg else None
 
-    password = password_msg['output']
-
-    # call backend login
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            LOGIN_URL,
-            data={
-                "username": username,
-                "password": password
-            }
-        )
+    # 3. Call backend login
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                LOGIN_URL,
+                data={"username": username, "password": password},
+            )
+        except Exception as e:
+            await cl.Message(content=f"Failed to connect to backend: {e}").send()
+            return
 
     if response.status_code != 200:
-        await cl.Message(content="Login failed").send()
+        await cl.Message(content="Login failed. Please refresh and check your credentials.").send()
         return
 
     data = response.json()
-
     token = data["access_token"]
-
     role = data.get("role")
 
-    # store in session
     cl.user_session.set("token", token)
     cl.user_session.set("role", role)
+    cl.user_session.set("username", username)
 
-    await cl.Message(content=f"Logged in as {role}").send()
-    role = cl.user_session.get("role")
+    await cl.Message(content=f"Logged in as **{username}** ({role.upper()})").send()
 
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # If Admin -> Allow document upload
     if role == "admin":
-        await cl.Message(content="Admin Panel Access").send()
+        await cl.Message(content="Welcome Admin! You can upload knowledge base documents below:").send()
+        files = await cl.AskFileMessage(
+            content="Upload a document (PDF, TXT, MD)",
+            accept=["application/pdf", "text/plain", "text/markdown"],
+            max_size_mb=10,
+            timeout=180,
+        ).send()
+
+        if files:
+            file = files[0]
+            async with httpx.AsyncClient(timeout=120.0) as client:
+                with open(file.path, "rb") as f:
+                    upload_res = await client.post(
+                        UPLOAD_URL,
+                        files={"file": (file.name, f, "application/pdf")},
+                        headers=headers,
+                    )
+
+            if upload_res.status_code == 200:
+                await cl.Message(
+                    content="Document uploaded successfully! Processing will begin automatically."
+                ).send()
+                # Fetch status
+                async with httpx.AsyncClient() as client:
+                    docs_res = await client.get(DOCUMENTS_URL, headers=headers)
+                    if docs_res.status_code == 200:
+                        docs = docs_res.json()[-5:]
+                        status_text = "\n".join([f"- **{d['filename']}** → {d['status']}" for d in docs])
+                        await cl.Message(content=f"**Recent Documents:**\n\n{status_text}").send()
+            else:
+                await cl.Message(content=f"Upload failed: {upload_res.text}").send()
+
+    # If Customer -> Load existing chat history
     else:
-        await cl.Message(content="Customer Chat Access").send()
+        await cl.Message(content="Welcome to Customer Support! Ask any question about company policies or products.").send()
+        async with httpx.AsyncClient() as client:
+            try:
+                hist_res = await client.get(
+                    HISTORY_URL,
+                    params={"session_id": username},
+                    headers=headers,
+                )
+                if hist_res.status_code == 200:
+                    history = hist_res.json()
+                    for msg in history:
+                        await cl.Message(content=msg["content"], author=msg["role"]).send()
+            except Exception:
+                pass

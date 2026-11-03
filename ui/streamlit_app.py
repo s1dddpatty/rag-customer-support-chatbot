@@ -1,38 +1,20 @@
 import streamlit as st
 import requests
-# import uuid
-from streamlit_cookies_manager import EncryptedCookieManager
-
-cookies = EncryptedCookieManager(
-    prefix="rag_app",
-    password="some_secret_key"
-)
-
-if not cookies.ready():
-    st.stop()
-
-if not st.session_state.get("token"):
-    token = cookies.get("token")
-
-    if token and token.strip() and not st.session_state.get("_logged_out"):  # add this check
-        st.session_state.token = token
-        st.session_state.role = cookies.get("role")
-        st.session_state.username = cookies.get("username")
-        st.session_state.session_id = st.session_state.username
-
-LOGIN_URL = "http://localhost:8000/api/auth/login"
-
-UPLOAD_URL = "http://localhost:8000/api/documents/upload"
-DOCUMENTS_URL = "http://localhost:8000/api/documents/list"
-
-API_URL = "http://localhost:8000/api/documents/chat"
-HISTORY_URL = "http://localhost:8000/api/documents/chat/history"
 
 st.set_page_config(
     page_title="RAG Support Chatbot",
     page_icon="💬",
     layout="centered",
 )
+
+LOGIN_URL = "http://localhost:8000/api/auth/login"
+REGISTER_URL = "http://localhost:8000/api/auth/register"
+
+UPLOAD_URL = "http://localhost:8000/api/documents/upload"
+DOCUMENTS_URL = "http://localhost:8000/api/documents/list"
+
+API_URL = "http://localhost:8000/api/documents/chat"
+HISTORY_URL = "http://localhost:8000/api/documents/chat/history"
 
 # ---------- session defaults ----------
 if "token" not in st.session_state:
@@ -62,12 +44,6 @@ def login_user(username: str, password: str):
         return e
 
 def logout():
-    cookies["token"] = ""
-    cookies["role"] = ""
-    cookies["username"] = ""
-    cookies.save()
-
-    # Don't use st.session_state.clear() — it wipes the cookie manager's internal state
     for key in ["token", "role", "username", "session_id", "messages"]:
         st.session_state.pop(key, None)
 
@@ -76,44 +52,65 @@ def logout():
 
 def show_login_page():
     st.title("RAG Support Chatbot")
-    st.subheader("Login")
+    tab_login, tab_register = st.tabs(["Login", "Register New User"])
 
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login")
+    with tab_login:
+        st.subheader("Login")
 
-    if submitted:
-        if not username or not password:
-            st.error("Enter both username and password.")
-            return
+        with st.form("login_form"):
+            username = st.text_input("Username", key="login_user")
+            password = st.text_input("Password", type="password", key="login_pass")
+            submitted = st.form_submit_button("Login")
 
-        result = login_user(username, password)
+        if submitted:
+            if not username or not password:
+                st.error("Enter both username and password.")
+                return
 
-        if isinstance(result, Exception):
-            st.error(f"Backend connection failed: {result}")
-            return
+            result = login_user(username, password)
 
-        if result.status_code != 200:
-            st.error("Login failed.")
-            return
+            if isinstance(result, Exception):
+                st.error(f"Backend connection failed: {result}")
+                return
 
-        data = result.json()
+            if result.status_code != 200:
+                st.error("Login failed. Check credentials or register user.")
+                return
 
-        st.session_state.token = data.get("access_token")
-        st.session_state.role = data.get("role")
-        st.session_state.username = username
+            data = result.json()
 
-        # persist
-        cookies["token"] = st.session_state.token
-        cookies["role"] = st.session_state.role
-        cookies["username"] = username
-        cookies.save()
-            
-        st.session_state.session_id = username
+            st.session_state.token = data.get("access_token")
+            st.session_state.role = data.get("role")
+            st.session_state.username = username
+            st.session_state.session_id = username
 
-        st.success(f"Logged in as {st.session_state.role}")
-        st.rerun()
+            st.success(f"Logged in as {st.session_state.role}")
+            st.rerun()
+
+    with tab_register:
+        st.subheader("Register")
+        with st.form("register_form"):
+            reg_username = st.text_input("New Username", key="reg_user")
+            reg_password = st.text_input("New Password", type="password", key="reg_pass")
+            reg_role = st.selectbox("Role", ["customer", "admin"], key="reg_role")
+            reg_submitted = st.form_submit_button("Create Account")
+
+        if reg_submitted:
+            if not reg_username or not reg_password:
+                st.error("Enter username and password.")
+            else:
+                try:
+                    res = requests.post(
+                        REGISTER_URL,
+                        json={"username": reg_username, "password": reg_password, "user_role": reg_role},
+                        timeout=15
+                    )
+                    if res.status_code == 200:
+                        st.success(f"Account '{reg_username}' created as {reg_role}! Please switch to the Login tab.")
+                    else:
+                        st.error(f"Registration failed: {res.text}")
+                except Exception as e:
+                    st.error(f"Registration error: {e}")
 
 
 def show_admin_panel():
@@ -132,8 +129,8 @@ def show_admin_panel():
     st.subheader("Upload Document")
 
     uploaded_file = st.file_uploader(
-        "Upload PDF",
-        type=["pdf"]
+        "Upload Document (PDF, TXT, MD)",
+        type=["pdf", "txt", "md"]
     )
 
     if st.button("Upload"):
@@ -197,7 +194,7 @@ def upload_document(file):
         }
 
         files = {
-            "file": (file.name, file, "application/pdf")
+            "file": (file.name, file.getvalue(), "application/octet-stream")
         }
 
         response = requests.post(

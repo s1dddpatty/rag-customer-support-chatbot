@@ -24,7 +24,7 @@ def process_pending_documents():
         db.close()
 
 
-scheduler = BackgroundScheduler()
+scheduler = BackgroundScheduler(daemon=True)
 
 
 def start_scheduler():
